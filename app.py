@@ -277,9 +277,9 @@ month_names = {
     12: "December"
 }
 
-# Year selector: 2014, 2015 and 2016
+# Allow forecast start years from the first forecast year to 2016.
 MIN_FORECAST_YEAR = first_forecast_month.year
-MAX_FORECAST_YEAR = 2017
+MAX_FORECAST_YEAR = 2016
 
 if MIN_FORECAST_YEAR > MAX_FORECAST_YEAR:
     st.error(
@@ -299,8 +299,8 @@ selected_year = st.sidebar.selectbox(
     key="forecast_year"
 )
 
-# For the first forecast year, only months after the last
-# historical month are available.
+# In the first forecast year, only months after historical data
+# are available.
 if selected_year == first_forecast_month.year:
     available_months = list(
         range(first_forecast_month.month, 13)
@@ -308,7 +308,7 @@ if selected_year == first_forecast_month.year:
 else:
     available_months = list(range(1, 13))
 
-# Keep the selected month valid when the year changes.
+# Keep the month valid when the selected year changes.
 if (
     "forecast_month" not in st.session_state
     or st.session_state["forecast_month"] not in available_months
@@ -328,16 +328,22 @@ selected_forecast_start = pd.Timestamp(
     day=1
 )
 
-horizon = st.sidebar.selectbox(
+# Duration options: 30, 60, and 90 days.
+duration_days = st.sidebar.selectbox(
     "Forecast Duration",
-    options=[3, 6, 12],
+    options=[30, 60, 90],
     index=0,
-    format_func=lambda value: f"{value} months"
+    format_func=lambda value: f"{value} Days"
 )
 
+# The model predicts monthly sales, not daily sales.
+# These options represent 1, 2, or 3 monthly forecast periods.
+horizon = duration_days // 30
+
 st.sidebar.caption(
-    "Forecasts are generated from the last historical month. "
-    "Predictions for distant start dates are less reliable."
+    "Forecasts use monthly sales data. 30, 60 and 90 days "
+    "represent approximately 1, 2 and 3 monthly forecast periods, "
+    "not daily predictions."
 )
 
 st.sidebar.divider()
@@ -428,7 +434,8 @@ st.write(
     f"**{selected_forecast_start.strftime('%B %Y')}**"
 )
 
-st.write(f"Forecast duration: **{horizon} months**")
+st.write(f"Selected duration: **{duration_days} Days**")
+st.write(f"Monthly forecast periods: **{horizon}**")
 
 if st.button(
     "Generate Sales Forecast",
@@ -449,7 +456,7 @@ if st.button(
             )
             st.stop()
 
-        # Generate predictions from the end of historical data
+        # Generate predictions from the last historical month
         # through the end of the selected forecast period.
         forecast_steps = gap_months + horizon - 1
 
@@ -503,8 +510,8 @@ if st.button(
         )
 
         st.caption(
-            "Calendar days represent the inclusive period covered "
-            "by monthly forecasts. They are not daily predictions."
+            "This is the calendar span covered by the monthly forecasts. "
+            "Actual days may vary by month; daily sales are not predicted."
         )
 
         # ---------------------------------------------
@@ -523,8 +530,8 @@ if st.button(
         )
 
         metric3.metric(
-            "Forecast Duration",
-            f"{horizon} months"
+            "Selected Duration",
+            f"{duration_days} Days"
         )
 
         # ---------------------------------------------
@@ -572,8 +579,6 @@ if st.button(
         # ---------------------------------------------
         st.subheader("Historical vs Forecast Sales")
 
-        # Last 12 actual historical months before the
-        # selected forecast start date.
         recent_history = monthly_sales.tail(12).copy()
 
         comparison_history = recent_history[
@@ -634,7 +639,7 @@ if st.button(
         st.download_button(
             label="⬇️ Download Forecast as CSV",
             data=csv_data,
-            file_name=f"sales_forecast_{horizon}_months.csv",
+            file_name=f"sales_forecast_{duration_days}_days.csv",
             mime="text/csv",
             use_container_width=True
         )
