@@ -61,7 +61,6 @@ monthly_sales = pd.Series(monthly_sales).copy()
 monthly_sales.index = pd.to_datetime(monthly_sales.index)
 monthly_sales = monthly_sales.astype(float).dropna()
 
-# Normalize each date to the first day of its month
 monthly_sales.index = (
     monthly_sales.index.to_period("M").to_timestamp()
 )
@@ -126,7 +125,6 @@ def generate_forecast(
             history.index.max() + pd.offsets.MonthBegin(1)
         )
 
-        # Feature calculations must match the training notebook.
         features = {
             "month": next_month.month,
             "year_number": (
@@ -152,7 +150,7 @@ def generate_forecast(
             "Predicted Sales": predicted_sales
         })
 
-        # Use the prediction for the next month's lag features.
+        # Use predicted sales for the next month's lag features.
         history.loc[next_month] = predicted_sales
 
     return pd.DataFrame(predictions)
@@ -169,7 +167,6 @@ def create_sales_chart(
 ):
     fig = go.Figure()
 
-    # Historical sales
     if historical_data is not None and not historical_data.empty:
         hist = historical_data.sort_index()
 
@@ -189,7 +186,6 @@ def create_sales_chart(
             )
         )
 
-    # Forecast sales
     if forecast_data is not None and not forecast_data.empty:
         forecast = forecast_data.sort_values("Month")
 
@@ -267,14 +263,33 @@ st.sidebar.header("⚙️ Forecast Settings")
 st.sidebar.subheader("Select Forecast Start Date")
 
 month_names = {
-    1: "January", 2: "February", 3: "March",
-    4: "April", 5: "May", 6: "June",
-    7: "July", 8: "August", 9: "September",
-    10: "October", 11: "November", 12: "December"
+    1: "January",
+    2: "February",
+    3: "March",
+    4: "April",
+    5: "May",
+    6: "June",
+    7: "July",
+    8: "August",
+    9: "September",
+    10: "October",
+    11: "November",
+    12: "December"
 }
 
+# Year selector: 2014, 2015 and 2016
+MIN_FORECAST_YEAR = first_forecast_month.year
+MAX_FORECAST_YEAR = 2016
+
+if MIN_FORECAST_YEAR > MAX_FORECAST_YEAR:
+    st.error(
+        "The historical data ends after the configured forecast "
+        "year range. Please update MAX_FORECAST_YEAR."
+    )
+    st.stop()
+
 available_years = list(
-    range(first_forecast_month.year, 2036)
+    range(MIN_FORECAST_YEAR, MAX_FORECAST_YEAR + 1)
 )
 
 selected_year = st.sidebar.selectbox(
@@ -284,6 +299,8 @@ selected_year = st.sidebar.selectbox(
     key="forecast_year"
 )
 
+# For the first forecast year, only months after the last
+# historical month are available.
 if selected_year == first_forecast_month.year:
     available_months = list(
         range(first_forecast_month.month, 13)
@@ -291,6 +308,7 @@ if selected_year == first_forecast_month.year:
 else:
     available_months = list(range(1, 13))
 
+# Keep the selected month valid when the year changes.
 if (
     "forecast_month" not in st.session_state
     or st.session_state["forecast_month"] not in available_months
@@ -317,6 +335,11 @@ horizon = st.sidebar.selectbox(
     format_func=lambda value: f"{value} months"
 )
 
+st.sidebar.caption(
+    "Forecasts are generated from the last historical month. "
+    "Predictions for distant start dates are less reliable."
+)
+
 st.sidebar.divider()
 st.sidebar.subheader("Dataset Information")
 
@@ -324,13 +347,16 @@ st.sidebar.write(
     f"First historical month: "
     f"**{first_historical_month.strftime('%B %Y')}**"
 )
+
 st.sidebar.write(
     f"Last historical month: "
     f"**{last_historical_month.strftime('%B %Y')}**"
 )
+
 st.sidebar.write(
     f"Historical months available: **{len(monthly_sales)}**"
 )
+
 st.sidebar.write(
     f"Selected forecast start: "
     f"**{selected_forecast_start.strftime('%B %Y')}**"
@@ -349,10 +375,12 @@ col1.metric(
     "Total Historical Sales",
     f"{monthly_sales.sum():,.2f}"
 )
+
 col2.metric(
     "Average Monthly Sales",
     f"{monthly_sales.mean():,.2f}"
 )
+
 col3.metric(
     "Historical Months",
     f"{len(monthly_sales)}"
@@ -399,6 +427,7 @@ st.write(
     f"Selected start month: "
     f"**{selected_forecast_start.strftime('%B %Y')}**"
 )
+
 st.write(f"Forecast duration: **{horizon} months**")
 
 if st.button(
@@ -420,6 +449,8 @@ if st.button(
             )
             st.stop()
 
+        # Generate predictions from the end of historical data
+        # through the end of the selected forecast period.
         forecast_steps = gap_months + horizon - 1
 
         all_forecasts = generate_forecast(
@@ -429,22 +460,27 @@ if st.button(
             horizon=forecast_steps
         )
 
+        # Display only the selected start month and duration.
         forecast_df = all_forecasts[
             all_forecasts["Month"] >= selected_forecast_start
         ].head(horizon).copy().reset_index(drop=True)
 
         if len(forecast_df) != horizon:
-            st.error("The complete forecast period could not be generated.")
+            st.error(
+                "The complete forecast period could not be generated."
+            )
             st.stop()
 
         # ---------------------------------------------
         # 11. FORECAST DATE RANGE
         # ---------------------------------------------
         range_start = forecast_df["Month"].min()
+
         range_end = (
             forecast_df["Month"].max()
             + pd.offsets.MonthEnd(0)
         )
+
         calendar_days = (range_end - range_start).days + 1
 
         st.success("Forecast generated successfully!")
@@ -455,10 +491,12 @@ if st.button(
             "Forecast Start Date",
             range_start.strftime("%d %b %Y")
         )
+
         date_col2.metric(
             "Forecast End Date",
             range_end.strftime("%d %b %Y")
         )
+
         date_col3.metric(
             "Calendar Days Covered",
             f"{calendar_days} days"
@@ -478,10 +516,12 @@ if st.button(
             "Total Predicted Sales",
             f"{forecast_df['Predicted Sales'].sum():,.2f}"
         )
+
         metric2.metric(
             "Average Monthly Forecast",
             f"{forecast_df['Predicted Sales'].mean():,.2f}"
         )
+
         metric3.metric(
             "Forecast Duration",
             f"{horizon} months"
@@ -494,9 +534,11 @@ if st.button(
         st.subheader("📋 Monthly Forecast Results")
 
         display_forecast = forecast_df.copy()
+
         display_forecast["Month"] = (
             display_forecast["Month"].dt.strftime("%B %Y")
         )
+
         display_forecast["Predicted Sales"] = (
             display_forecast["Predicted Sales"].round(2)
         )
@@ -530,10 +572,10 @@ if st.button(
         # ---------------------------------------------
         st.subheader("Historical vs Forecast Sales")
 
-        # Last 12 actual historical months
+        # Last 12 actual historical months before the
+        # selected forecast start date.
         recent_history = monthly_sales.tail(12).copy()
 
-        # Include selected forecast period
         comparison_history = recent_history[
             recent_history.index < selected_forecast_start
         ]
@@ -545,7 +587,6 @@ if st.button(
             height=500
         )
 
-        # Keep the chart focused on the relevant period
         chart_start = comparison_history.index.min()
 
         if pd.isna(chart_start):
@@ -562,7 +603,8 @@ if st.button(
 
         st.caption(
             "Historical sales and forecast sales are shown separately "
-            "in chronological order."
+            "in chronological order. If the selected forecast starts "
+            "far in the future, a time gap will appear between them."
         )
 
         st.plotly_chart(
@@ -578,9 +620,11 @@ if st.button(
         st.subheader("Download Forecast")
 
         download_df = forecast_df.copy()
+
         download_df["Month"] = (
             download_df["Month"].dt.strftime("%Y-%m-%d")
         )
+
         download_df["Predicted Sales"] = (
             download_df["Predicted Sales"].round(2)
         )
@@ -611,6 +655,7 @@ if st.button(
 # 17. FOOTER
 # =========================================================
 st.divider()
+
 st.caption(
     "Sales Forecasting Dashboard | Ridge Regression | "
     "Monthly Time-Series Forecasting"
