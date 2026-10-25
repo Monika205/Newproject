@@ -15,7 +15,7 @@ st.set_page_config(
 )
 
 # ==================================================
-# 2. CUSTOM STYLING
+# 2. CUSTOM CSS
 # ==================================================
 st.markdown("""
 <style>
@@ -42,7 +42,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==================================================
-# 3. LOAD TRAINED MODEL BUNDLE
+# 3. LOAD TRAINED MODEL
 # ==================================================
 MODEL_PATH = Path("sales_forecasting_bundle.joblib")
 
@@ -54,14 +54,13 @@ def load_bundle(path):
 
 if not MODEL_PATH.exists():
     st.error(
-        "Model bundle not found. Keep "
+        "Model bundle not found. Please keep "
         "'sales_forecasting_bundle.joblib' in the same folder as app.py."
     )
     st.stop()
 
 try:
     bundle = load_bundle(str(MODEL_PATH))
-
     model = bundle["model"]
     monthly_sales = bundle["monthly_sales"]
     feature_columns = list(bundle["feature_columns"])
@@ -71,13 +70,13 @@ except Exception as error:
     st.stop()
 
 # ==================================================
-# 4. PREPARE HISTORICAL MONTHLY SALES
+# 4. PREPARE HISTORICAL SALES
 # ==================================================
 if isinstance(monthly_sales, pd.DataFrame):
     if monthly_sales.shape[1] != 1:
         st.error(
-            "The saved monthly_sales data contains multiple columns. "
-            "Please check the model bundle."
+            "The saved monthly_sales data has multiple columns. "
+            "Please check your model bundle."
         )
         st.stop()
 
@@ -93,8 +92,8 @@ monthly_sales = monthly_sales.astype(float).dropna()
 
 if len(monthly_sales) < 12:
     st.error(
-        "At least 12 months of historical sales are required "
-        "for the current lag and rolling features."
+        "At least 12 months of historical data is required "
+        "for the current forecasting features."
     )
     st.stop()
 
@@ -111,14 +110,15 @@ def generate_forecast(model, historical_sales, feature_columns, horizon):
 
     for _ in range(horizon):
 
+        # Start from the next month after available data
         next_month = history.index.max() + pd.offsets.MonthBegin(1)
 
-        # These feature calculations must match the training notebook.
+        # IMPORTANT:
+        # These features must match the original training notebook.
         features = {
             "month": next_month.month,
 
-            # Assumes year_number was trained as the calendar year.
-            # Change this if your notebook used a different formula.
+            # Verify this formula against your training code.
             "year_number": next_month.year,
 
             "lag_1": history.iloc[-1],
@@ -135,7 +135,7 @@ def generate_forecast(model, historical_sales, feature_columns, horizon):
 
         if missing_features:
             raise ValueError(
-                f"Forecast feature definitions are missing: {missing_features}"
+                f"Missing forecast features: {missing_features}"
             )
 
         input_data = pd.DataFrame(
@@ -150,7 +150,7 @@ def generate_forecast(model, historical_sales, feature_columns, horizon):
             "Predicted Sales": predicted_sales
         })
 
-        # Recursive forecasting: predictions feed into later months.
+        # Use the predicted value for subsequent months
         history.loc[next_month] = predicted_sales
 
     return pd.DataFrame(predictions)
@@ -161,20 +161,20 @@ def generate_forecast(model, historical_sales, feature_columns, horizon):
 st.title("📈 Sales Forecasting Dashboard")
 
 st.write(
-    "Explore historical sales and generate future monthly forecasts "
+    "Analyze historical sales and forecast future monthly sales "
     "using a trained Ridge Regression model."
 )
 
 st.markdown("""
 <div class="info-box">
-<b>Forecasting approach:</b> The forecast starts after the last month
-available in the dataset. The app does not claim to predict actual
-current sales using unavailable recent data.
+<b>Forecasting approach:</b> Forecasts begin after the last month
+available in the dataset. The app does not claim to predict current
+sales using unavailable recent data.
 </div>
 """, unsafe_allow_html=True)
 
 # ==================================================
-# 7. SIDEBAR FORECAST SETTINGS
+# 7. SIDEBAR SETTINGS
 # ==================================================
 st.sidebar.title("⚙️ Forecast Settings")
 
@@ -184,7 +184,7 @@ st.sidebar.text_input(
     "Start month and year",
     value=forecast_start.strftime("%B %Y"),
     disabled=True,
-    help="Automatically calculated from the last available data month."
+    help="Automatically calculated from the final month in the dataset."
 )
 
 st.sidebar.caption(
@@ -192,7 +192,7 @@ st.sidebar.caption(
 )
 
 horizon = st.sidebar.selectbox(
-    "Forecast duration",
+    "Select forecast duration",
     options=list(range(1, 7)),
     format_func=lambda value: (
         f"{value} month" if value == 1 else f"{value} months"
@@ -200,11 +200,11 @@ horizon = st.sidebar.selectbox(
 )
 
 st.sidebar.divider()
-
 st.sidebar.subheader("Dataset Information")
+
 st.sidebar.write(f"Historical months: **{len(monthly_sales)}**")
 st.sidebar.write(
-    f"Forecast starts: **{forecast_start.strftime('%B %Y')}**"
+    f"Forecast begins: **{forecast_start.strftime('%B %Y')}**"
 )
 
 # ==================================================
@@ -253,7 +253,6 @@ st.line_chart(
 with st.expander("View historical sales records"):
 
     historical_table = historical_chart.copy()
-
     historical_table = historical_table.sort_values(
         "Month", ascending=False
     )
@@ -261,7 +260,6 @@ with st.expander("View historical sales records"):
     historical_table["Month"] = historical_table["Month"].dt.strftime(
         "%B %Y"
     )
-
     historical_table["Sales"] = historical_table["Sales"].round(2)
 
     st.dataframe(
@@ -271,14 +269,14 @@ with st.expander("View historical sales records"):
     )
 
 # ==================================================
-# 10. GENERATE SALES FORECAST
+# 10. FORECAST SECTION
 # ==================================================
 st.divider()
 st.subheader("🔮 Sales Forecast")
 
 st.write(f"Selected duration: **{horizon} month(s)**")
 st.write(
-    f"Forecast begins: **{forecast_start.strftime('%d %B %Y')}**"
+    f"Forecast starts from: **{forecast_start.strftime('%d %B %Y')}**"
 )
 
 if st.button(
@@ -295,9 +293,9 @@ if st.button(
             horizon=horizon
         )
 
-        # --------------------------------------------------
+        # ==================================================
         # 11. FORECAST DATE RANGE
-        # --------------------------------------------------
+        # ==================================================
         range_start = forecast_df["Month"].min()
 
         range_end = (
@@ -305,16 +303,16 @@ if st.button(
             + pd.offsets.MonthEnd(0)
         )
 
-        # Inclusive calendar-day count
+        # Inclusive calendar days
         calendar_days = (range_end - range_start).days + 1
 
-        # --------------------------------------------------
-        # 12. FORECAST SUMMARY METRICS
-        # --------------------------------------------------
+        # ==================================================
+        # 12. FORECAST METRICS
+        # ==================================================
         total_forecast = forecast_df["Predicted Sales"].sum()
         average_forecast = forecast_df["Predicted Sales"].mean()
 
-        st.success("Forecast generated successfully!")
+        st.success("Sales forecast generated successfully!")
 
         date_col1, date_col2, date_col3 = st.columns(3)
 
@@ -334,8 +332,8 @@ if st.button(
         )
 
         st.caption(
-            "Calendar days show the inclusive date range covered "
-            "by the monthly forecasts. They are not daily predictions."
+            "Calendar days represent the complete date range covered "
+            "by the monthly forecast. They are not daily predictions."
         )
 
         st.divider()
@@ -357,9 +355,9 @@ if st.button(
             f"{horizon} month(s)"
         )
 
-        # --------------------------------------------------
+        # ==================================================
         # 13. FORECAST TABLE
-        # --------------------------------------------------
+        # ==================================================
         st.divider()
         st.subheader("📋 Monthly Forecast Results")
 
@@ -379,9 +377,9 @@ if st.button(
             hide_index=True
         )
 
-        # --------------------------------------------------
+        # ==================================================
         # 14. FORECAST CHART
-        # --------------------------------------------------
+        # ==================================================
         st.subheader("📈 Predicted Monthly Sales")
 
         st.line_chart(
@@ -391,9 +389,9 @@ if st.button(
             use_container_width=True
         )
 
-        # --------------------------------------------------
+        # ==================================================
         # 15. HISTORICAL VS FORECAST CHART
-        # --------------------------------------------------
+        # ==================================================
         st.subheader("Historical vs Forecast Sales")
 
         historical_part = pd.DataFrame({
@@ -420,9 +418,9 @@ if st.button(
             use_container_width=True
         )
 
-        # --------------------------------------------------
+        # ==================================================
         # 16. CSV DOWNLOAD
-        # --------------------------------------------------
+        # ==================================================
         st.divider()
         st.subheader("Download Forecast")
 
@@ -447,8 +445,8 @@ if st.button(
         )
 
         st.caption(
-            "These are model-based estimates, not guaranteed actual sales. "
-            "Forecast uncertainty may increase for longer horizons."
+            "Forecast values are estimates, not guaranteed actual sales. "
+            "Uncertainty can increase with longer forecast horizons."
         )
 
     except Exception as error:
@@ -456,7 +454,7 @@ if st.button(
 
         st.info(
             "Verify that the feature names and calculations in this app "
-            "match those used when training the saved model."
+            "match the original model training notebook."
         )
 
 # ==================================================
