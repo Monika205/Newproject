@@ -14,31 +14,68 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-API_URL = "https://newproject-gvg1.onrender.com/forecast"
+API_BASE_URL = "https://newproject-gvg1.onrender.com"
+HISTORY_API_URL = f"{API_BASE_URL}/history"
+FORECAST_API_URL = f"{API_BASE_URL}/forecast"
 
 
 # =========================================================
-# 2. LOAD HISTORICAL DATA FROM BACKEND
+# 2. LOAD HISTORICAL SALES FROM BACKEND
 # =========================================================
 @st.cache_data(ttl=3600)
 def load_historical_sales():
-    """
-    The frontend no longer loads the model bundle.
-    The historical sales series is retrieved from the API.
-    """
-    # The existing forecast API does not expose historical data.
-    # This function is replaced below by the history endpoint.
     response = requests.get(
-        "https://newproject-gvg1.onrender.com/history",
+        HISTORY_API_URL,
         timeout=60
     )
     response.raise_for_status()
 
     data = response.json()
-    history = pd.DataFrame(data["historical_sales"])
 
-    history["Month"] = pd.to_datetime(history["Month"])
-    history = history.set_index("Month")["Sales"].sort_index()
+    if "historical_sales" not in data:
+        raise ValueError(
+            "The backend response does not contain historical_sales."
+        )
+
+    history_df = pd.DataFrame(data["historical_sales"])
+
+    if history_df.empty:
+        raise ValueError("The backend returned no historical sales data.")
+
+    required_columns = {"Month", "Sales"}
+
+    if not required_columns.issubset(history_df.columns):
+        raise ValueError(
+            "Historical data must contain Month and Sales columns."
+        )
+
+    history_df["Month"] = pd.to_datetime(
+        history_df["Month"],
+        errors="coerce"
+    )
+    history_df["Sales"] = pd.to_numeric(
+        history_df["Sales"],
+        errors="coerce"
+    )
+
+    history_df = history_df.dropna(
+        subset=["Month", "Sales"]
+    )
+
+    history_df["Month"] = (
+        history_df["Month"].dt.to_period("M").dt.to_timestamp()
+    )
+
+    history = (
+        history_df.groupby("Month")["Sales"]
+        .sum()
+        .sort_index()
+    )
+
+    if len(history) < 12:
+        raise ValueError(
+            "At least 12 months of historical sales are required."
+        )
 
     return history
 
@@ -141,28 +178,34 @@ try:
 
 except Exception as error:
     st.error(
-        "Unable to load historical sales. The backend needs a "
-        f"/history endpoint. Details: {error}"
+        f"Unable to load historical sales from the backend: {error}"
     )
-    st.stop()
-
-if len(monthly_sales) < 12:
-    st.error("At least 12 historical months are required.")
+    st.info(
+        "Check that the Render backend is running and that "
+        "the /history endpoint is available."
+    )
     st.stop()
 
 first_historical_month = monthly_sales.index.min()
 last_historical_month = monthly_sales.index.max()
 
+# The first forecast month needs 12 preceding historical months.
+earliest_forecast_month = (
+    first_historical_month + pd.DateOffset(months=12)
+)
+
 st.info(
-    f"Historical data available from "
+    f"Historical data: "
     f"{first_historical_month.strftime('%B %Y')} to "
     f"{last_historical_month.strftime('%B %Y')}. "
-    "Forecasts are estimates, not actual future sales."
+    f"Earliest eligible forecast month: "
+    f"{earliest_forecast_month.strftime('%B %Y')}. "
+    "Forecast values are estimates, not actual future sales."
 )
 
 
 # =========================================================
-# 5. SIDEBAR SETTINGS
+# 5. SIDEBAR FORECAST SETTINGS
 # =========================================================
 st.sidebar.header("⚙️ Forecast Settings")
 st.sidebar.subheader("Select Forecast Start Date")
@@ -216,8 +259,9 @@ duration_days = st.sidebar.selectbox(
 horizon = duration_days // 30
 
 st.sidebar.caption(
-    "The model predicts monthly sales: 30 days = 1 month, "
-    "60 days = 2 months and 90 days = 3 months."
+    "The model predicts monthly sales: "
+    "30 days = 1 month, 60 days = 2 months, "
+    "90 days = 3 months."
 )
 
 st.sidebar.divider()
@@ -242,6 +286,17 @@ st.sidebar.write(
     f"**{selected_forecast_start.strftime('%B %Y')}**"
 )
 
+valid_forecast_date = (
+    selected_forecast_start >= earliest_forecast_month
+)
+
+if not valid_forecast_date:
+    st.sidebar.warning(
+        "This month does not have 12 preceding historical months. "
+        f"Select {earliest_forecast_month.strftime('%B %Y')} "
+        "or a later month."
+    )
+
 
 # =========================================================
 # 6. HISTORICAL SALES OVERVIEW
@@ -251,9 +306,18 @@ st.subheader("📊 Historical Sales Overview")
 
 col1, col2, col3 = st.columns(3)
 
-col1.metric("Total Historical Sales", f"{monthly_sales.sum():,.2f}")
-col2.metric("Average Monthly Sales", f"{monthly_sales.mean():,.2f}")
-col3.metric("Historical Months", f"{len(monthly_sales)}")
+col1.metric(
+    "Total Historical Sales",
+    f"{monthly_sales.sum():,.2f}"
+)
+col2.metric(
+    "Average Monthly Sales",
+    f"{monthly_sales.mean():,.2f}"
+)
+col3.metric(
+    "Historical Months",
+    f"{len(monthly_sales)}"
+)
 
 st.subheader("Historical Monthly Sales")
 
@@ -297,7 +361,8 @@ st.write(f"Forecast duration: **{duration_days} days**")
 if st.button(
     "Generate Sales Forecast",
     type="primary",
-    use_container_width=True
+    use_container_width=True,
+    disabled=not valid_forecast_date
 ):
     try:
         with st.spinner("Requesting forecast from the backend..."):
@@ -308,194 +373,239 @@ if st.button(
             }
 
             response = requests.post(
-                API_URL,
+                FORECAST_API_URL,
                 json=payload,
                 timeout=120
             )
 
-            if response.status_code >= 400:
-                try:
-                    detail = response.json().get(
-                        "detail", response.text
-                    )
-                except ValueError:
-                    detail = response.text
+        if response.status_code >= 400:
+            try:
+                error_data = response.json()
+                detail = error_data.get("detail", response.text)
+            except ValueError:
+                detail = response.text
 
-                st.error(f"Backend error ({response.status_code}): {detail}")
-                st.stop()
+            st.error(
+                f"Backend error ({response.status_code}): {detail}"
+            )
 
+        else:
             result = response.json()
 
-        forecast_df = pd.DataFrame(result["forecasts"])
+            if not result.get("forecasts"):
+                st.error("The backend returned no forecast results.")
 
-        forecast_df["Month"] = pd.to_datetime(
-            forecast_df["month"]
-        )
+            else:
+                forecast_df = pd.DataFrame(result["forecasts"])
 
-        forecast_df["Predicted Sales"] = pd.to_numeric(
-            forecast_df["predicted_sales"]
-        ).clip(lower=0)
+                forecast_df["Month"] = pd.to_datetime(
+                    forecast_df["month"],
+                    errors="coerce"
+                )
 
-        forecast_df = forecast_df[
-            ["Month", "Predicted Sales"]
-        ].sort_values("Month").reset_index(drop=True)
+                forecast_df["Predicted Sales"] = pd.to_numeric(
+                    forecast_df["predicted_sales"],
+                    errors="coerce"
+                ).clip(lower=0)
 
-        if forecast_df.empty:
-            st.error("The backend returned no forecast results.")
-            st.stop()
+                forecast_df = forecast_df.dropna(
+                    subset=["Month", "Predicted Sales"]
+                )
 
-        if forecast_df["Month"].iloc[0] != selected_forecast_start:
-            st.error(
-                "The returned forecast start does not match "
-                "the selected month."
-            )
-            st.stop()
+                forecast_df = (
+                    forecast_df[["Month", "Predicted Sales"]]
+                    .sort_values("Month")
+                    .reset_index(drop=True)
+                )
 
-        st.success("Forecast generated successfully through the API!")
+                if forecast_df.empty:
+                    st.error(
+                        "The backend returned invalid forecast values."
+                    )
 
-        # -------------------------------------------------
-        # 8. FORECAST DATE RANGE
-        # -------------------------------------------------
-        range_start = forecast_df["Month"].min()
-        range_end = forecast_df["Month"].max() + pd.offsets.MonthEnd(0)
-        calendar_days = (range_end - range_start).days + 1
+                elif (
+                    forecast_df["Month"].iloc[0]
+                    != selected_forecast_start
+                ):
+                    st.error(
+                        "The forecast start month returned by the "
+                        "backend does not match the selected month."
+                    )
 
-        date_col1, date_col2, date_col3 = st.columns(3)
+                elif len(forecast_df) != horizon:
+                    st.error(
+                        f"Expected {horizon} monthly predictions, "
+                        f"but received {len(forecast_df)}."
+                    )
 
-        date_col1.metric(
-            "Forecast Start Date",
-            range_start.strftime("%d %b %Y")
-        )
-        date_col2.metric(
-            "Forecast End Date",
-            range_end.strftime("%d %b %Y")
-        )
-        date_col3.metric(
-            "Calendar Days Covered",
-            f"{calendar_days} days"
-        )
+                else:
+                    st.success(
+                        "Forecast generated successfully through the API!"
+                    )
 
-        st.caption(
-            "Calendar days show the forecast date range, "
-            "not daily predictions."
-        )
+                    # ---------------------------------------------
+                    # 8. FORECAST DATE RANGE
+                    # ---------------------------------------------
+                    range_start = forecast_df["Month"].min()
+                    range_end = (
+                        forecast_df["Month"].max()
+                        + pd.offsets.MonthEnd(0)
+                    )
+                    calendar_days = (
+                        range_end - range_start
+                    ).days + 1
 
-        # -------------------------------------------------
-        # 9. FORECAST KPIs
-        # -------------------------------------------------
-        metric1, metric2, metric3 = st.columns(3)
+                    date_col1, date_col2, date_col3 = st.columns(3)
 
-        metric1.metric(
-            "Total Predicted Sales",
-            f"{forecast_df['Predicted Sales'].sum():,.2f}"
-        )
-        metric2.metric(
-            "Average Monthly Forecast",
-            f"{forecast_df['Predicted Sales'].mean():,.2f}"
-        )
-        metric3.metric("Forecast Duration", f"{duration_days} days")
+                    date_col1.metric(
+                        "Forecast Start Date",
+                        range_start.strftime("%d %b %Y")
+                    )
+                    date_col2.metric(
+                        "Forecast End Date",
+                        range_end.strftime("%d %b %Y")
+                    )
+                    date_col3.metric(
+                        "Calendar Days Covered",
+                        f"{calendar_days} days"
+                    )
 
-        # -------------------------------------------------
-        # 10. FORECAST TABLE
-        # -------------------------------------------------
-        st.divider()
-        st.subheader("📋 Monthly Forecast Results")
+                    st.caption(
+                        "Calendar days show the forecast date range, "
+                        "not daily predictions."
+                    )
 
-        display_forecast = forecast_df.copy()
-        display_forecast["Month"] = (
-            display_forecast["Month"].dt.strftime("%B %Y")
-        )
-        display_forecast["Predicted Sales"] = (
-            display_forecast["Predicted Sales"].round(2)
-        )
+                    # ---------------------------------------------
+                    # 9. FORECAST KPIs
+                    # ---------------------------------------------
+                    metric1, metric2, metric3 = st.columns(3)
 
-        st.dataframe(
-            display_forecast,
-            use_container_width=True,
-            hide_index=True
-        )
+                    metric1.metric(
+                        "Total Predicted Sales",
+                        f"{forecast_df['Predicted Sales'].sum():,.2f}"
+                    )
 
-        # -------------------------------------------------
-        # 11. FORECAST CHART
-        # -------------------------------------------------
-        st.subheader("📈 Predicted Monthly Sales")
+                    metric2.metric(
+                        "Average Monthly Forecast",
+                        f"{forecast_df['Predicted Sales'].mean():,.2f}"
+                    )
 
-        forecast_fig = create_sales_chart(
-            historical_data=None,
-            forecast_data=forecast_df,
-            title="Predicted Monthly Sales",
-            height=400
-        )
+                    metric3.metric(
+                        "Forecast Duration",
+                        f"{duration_days} days"
+                    )
 
-        st.plotly_chart(
-            forecast_fig,
-            use_container_width=True,
-            config={"displaylogo": False}
-        )
+                    # ---------------------------------------------
+                    # 10. FORECAST TABLE
+                    # ---------------------------------------------
+                    st.divider()
+                    st.subheader("📋 Monthly Forecast Results")
 
-        # -------------------------------------------------
-        # 12. HISTORICAL VS FORECAST
-        # -------------------------------------------------
-        st.subheader("Historical vs Forecast Sales")
+                    display_forecast = forecast_df.copy()
+                    display_forecast["Month"] = (
+                        display_forecast["Month"].dt.strftime("%B %Y")
+                    )
+                    display_forecast["Predicted Sales"] = (
+                        display_forecast["Predicted Sales"].round(2)
+                    )
 
-        recent_history = monthly_sales[
-            monthly_sales.index < selected_forecast_start
-        ].tail(12)
+                    st.dataframe(
+                        display_forecast,
+                        use_container_width=True,
+                        hide_index=True
+                    )
 
-        comparison_fig = create_sales_chart(
-            historical_data=recent_history,
-            forecast_data=forecast_df,
-            title="Historical vs Forecast Sales",
-            height=500
-        )
+                    # ---------------------------------------------
+                    # 11. FORECAST CHART
+                    # ---------------------------------------------
+                    st.subheader("📈 Predicted Monthly Sales")
 
-        chart_start = (
-            recent_history.index.min()
-            if not recent_history.empty
-            else forecast_df["Month"].min()
-        )
-        chart_end = (
-            forecast_df["Month"].max() + pd.offsets.MonthEnd(0)
-        )
+                    forecast_fig = create_sales_chart(
+                        historical_data=None,
+                        forecast_data=forecast_df,
+                        title="Predicted Monthly Sales",
+                        height=400
+                    )
 
-        comparison_fig.update_xaxes(
-            range=[chart_start, chart_end]
-        )
+                    st.plotly_chart(
+                        forecast_fig,
+                        use_container_width=True,
+                        config={"displaylogo": False}
+                    )
 
-        st.plotly_chart(
-            comparison_fig,
-            use_container_width=True,
-            config={"displaylogo": False}
-        )
+                    # ---------------------------------------------
+                    # 12. HISTORICAL VS FORECAST
+                    # ---------------------------------------------
+                    st.subheader("Historical vs Forecast Sales")
 
-        # -------------------------------------------------
-        # 13. DOWNLOAD CSV
-        # -------------------------------------------------
-        st.divider()
-        st.subheader("Download Forecast")
+                    recent_history = monthly_sales[
+                        monthly_sales.index < selected_forecast_start
+                    ].tail(12)
 
-        download_df = forecast_df.copy()
-        download_df["Month"] = (
-            download_df["Month"].dt.strftime("%Y-%m-%d")
-        )
-        download_df["Predicted Sales"] = (
-            download_df["Predicted Sales"].round(2)
-        )
+                    comparison_fig = create_sales_chart(
+                        historical_data=recent_history,
+                        forecast_data=forecast_df,
+                        title="Historical vs Forecast Sales",
+                        height=500
+                    )
 
-        st.download_button(
-            label="⬇️ Download Forecast as CSV",
-            data=download_df.to_csv(index=False).encode("utf-8"),
-            file_name=f"sales_forecast_{duration_days}_days.csv",
-            mime="text/csv",
-            use_container_width=True
-        )
+                    chart_start = (
+                        recent_history.index.min()
+                        if not recent_history.empty
+                        else forecast_df["Month"].min()
+                    )
 
-        st.caption(
-            "Forecast values are estimates and may differ from actual sales."
-        )
+                    chart_end = (
+                        forecast_df["Month"].max()
+                        + pd.offsets.MonthEnd(0)
+                    )
+
+                    comparison_fig.update_xaxes(
+                        range=[chart_start, chart_end]
+                    )
+
+                    st.plotly_chart(
+                        comparison_fig,
+                        use_container_width=True,
+                        config={"displaylogo": False}
+                    )
+
+                    # ---------------------------------------------
+                    # 13. DOWNLOAD FORECAST CSV
+                    # ---------------------------------------------
+                    st.divider()
+                    st.subheader("Download Forecast")
+
+                    download_df = forecast_df.copy()
+                    download_df["Month"] = (
+                        download_df["Month"].dt.strftime("%Y-%m-%d")
+                    )
+                    download_df["Predicted Sales"] = (
+                        download_df["Predicted Sales"].round(2)
+                    )
+
+                    st.download_button(
+                        label="⬇️ Download Forecast as CSV",
+                        data=download_df.to_csv(
+                            index=False
+                        ).encode("utf-8"),
+                        file_name=(
+                            f"sales_forecast_{duration_days}_days.csv"
+                        ),
+                        mime="text/csv",
+                        use_container_width=True
+                    )
+
+                    st.caption(
+                        "Forecast values are estimates and may differ "
+                        "from actual sales."
+                    )
 
     except requests.exceptions.RequestException as error:
-        st.error(f"Could not connect to the forecasting backend: {error}")
+        st.error(
+            f"Could not connect to the forecasting backend: {error}"
+        )
+
     except Exception as error:
         st.error(f"Forecast generation failed: {error}")
 
