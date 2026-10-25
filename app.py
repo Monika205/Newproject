@@ -310,12 +310,14 @@ selected_forecast_start = pd.Timestamp(
     day=1
 )
 
+
 horizon = st.sidebar.selectbox(
     "Forecast Duration",
-    options=[3, 6, 12],
-    index=0,
+    options=[1, 2, 3, 4, 5, 6],
+    index=2,
     format_func=lambda value: f"{value} months"
 )
+
 
 st.sidebar.divider()
 st.sidebar.subheader("Dataset Information")
