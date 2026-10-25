@@ -5,397 +5,387 @@ import numpy as np
 import joblib
 from pathlib import Path
 
-# =====================================================
-# PAGE CONFIGURATION
-# =====================================================
+# --------------------------------------------------
+# PAGE CONFIG
+# --------------------------------------------------
 st.set_page_config(
     page_title="Sales Forecasting Dashboard",
-    page_icon="📊",
+    page_icon="📈",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# =====================================================
-# FILE PATH
-# =====================================================
-MODEL_PATH = Path(__file__).parent / "sales_forecasting_bundle.joblib"
+# --------------------------------------------------
+# CUSTOM STYLING
+# --------------------------------------------------
+st.markdown("""
+<style>
+    .block-container {
+        padding-top: 1.8rem;
+        padding-bottom: 2rem;
+    }
+    div[data-testid="stMetric"] {
+        background-color: rgba(128, 128, 128, 0.08);
+        padding: 16px;
+        border-radius: 12px;
+        border: 1px solid rgba(128, 128, 128, 0.18);
+    }
+    .info-box {
+        padding: 14px;
+        border-radius: 10px;
+        background-color: rgba(100, 149, 237, 0.10);
+        border-left: 4px solid #6495ED;
+        margin-bottom: 15px;
+    }
+</style>
+""", unsafe_allow_html=True)
 
-# =====================================================
+# --------------------------------------------------
 # LOAD TRAINED MODEL BUNDLE
-# =====================================================
+# --------------------------------------------------
+MODEL_PATH = Path("sales_forecasting_bundle.joblib")
+
+
 @st.cache_resource
-def load_model_bundle(path):
+def load_bundle(path):
     return joblib.load(path)
 
 
-# =====================================================
-# FORECASTING FUNCTION
-# =====================================================
-def predict_next_month(history, forecast_date, model, feature_columns, first_year):
-    """
-    Predict one month using the trained model and previously
-    observed/predicted monthly sales.
-    """
+# --------------------------------------------------
+# FORECAST FUNCTION
+# --------------------------------------------------
+def generate_forecast(model, historical_sales, feature_columns, horizon):
+    history = historical_sales.copy().astype(float).sort_index()
+    predictions = []
 
-    history = history.sort_index()
+    for _ in range(horizon):
+        next_month = history.index.max() + pd.offsets.MonthBegin(1)
 
-    features = {
-        "month": forecast_date.month,
-        "year_number": forecast_date.year - first_year,
-        "lag_1": history.iloc[-1],
-        "lag_2": history.iloc[-2] if len(history) >= 2 else np.nan,
-        "lag_3": history.iloc[-3] if len(history) >= 3 else np.nan,
-        "lag_12": history.iloc[-12] if len(history) >= 12 else np.nan,
-        "rolling_mean_3": history.tail(3).mean(),
-        "rolling_mean_12": history.tail(12).mean()
-    }
+        # Features must match the model's training features.
+        features = {
+            "month": next_month.month,
+            "year_number": (
+                next_month.year - historical_sales.index.min().year + 1
+            ),
+            "lag_1": history.iloc[-1],
+            "lag_2": history.iloc[-2],
+            "lag_3": history.iloc[-3],
+            "lag_12": history.iloc[-12],
+            "rolling_mean_3": history.iloc[-3:].mean(),
+            "rolling_mean_12": history.iloc[-12:].mean()
+        }
 
-    # Use the same feature order as during model training
-    input_df = pd.DataFrame([features])
-    input_df = input_df[feature_columns]
-
-    prediction = float(model.predict(input_df)[0])
-
-    # Sales cannot be negative
-    return max(0.0, prediction)
-
-
-# =====================================================
-# GENERATE FORECAST FOR A SELECTED START MONTH
-# =====================================================
-def generate_forecast(
-    monthly_sales,
-    model,
-    feature_columns,
-    selected_start,
-    horizon,
-    first_year
-):
-    """
-    Forecast sequentially from the last actual month.
-    If the selected start month is later, intermediate
-    predictions are generated first so lag features remain valid.
-    """
-
-    last_actual_month = monthly_sales.index.max().to_period("M")
-    selected_start_period = selected_start.to_period("M")
-
-    history = monthly_sales.copy().sort_index()
-    forecast_records = []
-
-    next_period = last_actual_month + 1
-    final_period = selected_start_period + horizon - 1
-
-    while next_period <= final_period:
-        forecast_date = next_period.to_timestamp()
-
-        prediction = predict_next_month(
-            history=history,
-            forecast_date=forecast_date,
-            model=model,
-            feature_columns=feature_columns,
-            first_year=first_year
+        input_data = pd.DataFrame(
+            [[features[column] for column in feature_columns]],
+            columns=feature_columns
         )
 
-        history.loc[forecast_date] = prediction
+        predicted_sales = float(model.predict(input_data)[0])
 
-        # Display only the requested forecast period
-        if next_period >= selected_start_period:
-            forecast_records.append({
-                "Forecast Month": forecast_date,
-                "Predicted Sales": round(prediction, 2)
-            })
+        predictions.append({
+            "Month": next_month,
+            "Predicted Sales": predicted_sales
+        })
 
-        next_period += 1
+        # Recursive forecasting: each prediction is used for
+        # the following month's lag and rolling features.
+        history.loc[next_month] = predicted_sales
 
-    forecast_df = pd.DataFrame(forecast_records)
-    return forecast_df
+    return pd.DataFrame(predictions)
 
 
-# =====================================================
-# MAIN APPLICATION
-# =====================================================
-st.title("📊 Sales Forecasting Dashboard")
-
-st.write(
-    "Forecast future monthly sales using the trained "
-    "Ridge Regression model."
+# --------------------------------------------------
+# HEADER
+# --------------------------------------------------
+st.title("📈 Sales Forecasting Dashboard")
+st.caption(
+    "Monthly sales analysis and future sales forecasting "
+    "using a trained Ridge Regression model."
 )
 
-st.divider()
+st.markdown("""
+<div class="info-box">
+<b>Forecasting approach:</b> Predictions start from the month
+after the final month in the dataset. The app does not allow
+manual selection of an unrelated current or future date.
+</div>
+""", unsafe_allow_html=True)
 
-# =====================================================
-# CHECK AND LOAD MODEL
-# =====================================================
+# --------------------------------------------------
+# CHECK MODEL FILE
+# --------------------------------------------------
 if not MODEL_PATH.exists():
     st.error(
-        "Model file not found: sales_forecasting_bundle.joblib. "
-        "Place the model file in the same folder as app.py."
+        "Model bundle not found. Please keep "
+        "'sales_forecasting_bundle.joblib' in the same folder as app.py."
     )
     st.stop()
 
 try:
-    bundle = load_model_bundle(str(MODEL_PATH))
-
+    bundle = load_bundle(str(MODEL_PATH))
     model = bundle["model"]
-    monthly_sales = bundle["monthly_sales"].copy()
+    monthly_sales = bundle["monthly_sales"]
     feature_columns = bundle["feature_columns"]
 
 except Exception as error:
-    st.error(f"Could not load the model bundle: {error}")
+    st.error(f"Could not load the trained model bundle: {error}")
     st.stop()
 
+# --------------------------------------------------
+# PREPARE HISTORICAL SALES
+# --------------------------------------------------
+if isinstance(monthly_sales, pd.DataFrame):
+    monthly_sales = monthly_sales.squeeze()
 
-# =====================================================
-# PREPARE HISTORICAL DATA
-# =====================================================
+monthly_sales = pd.Series(monthly_sales).copy()
 monthly_sales.index = pd.to_datetime(monthly_sales.index)
 monthly_sales = monthly_sales.sort_index()
 monthly_sales = monthly_sales[~monthly_sales.index.duplicated(keep="last")]
-monthly_sales = pd.to_numeric(monthly_sales, errors="coerce").dropna()
+monthly_sales = monthly_sales.astype(float).dropna()
 
 if len(monthly_sales) < 12:
-    st.error(
-        "At least 12 months of monthly sales history are required "
-        "for this forecasting setup."
-    )
+    st.error("At least 12 months of historical sales are required.")
     st.stop()
 
-last_actual_month = monthly_sales.index.max().to_period("M")
-first_year = monthly_sales.index.min().year
+last_month = monthly_sales.index.max()
+forecast_start = last_month + pd.offsets.MonthBegin(1)
 
-# Allow selecting one of the next six forecast start months.
-# This avoids choosing an arbitrary current-year date far beyond
-# the available historical data.
-available_start_dates = pd.date_range(
-    start=(last_actual_month + 1).to_timestamp(),
-    periods=6,
-    freq="MS"
+# --------------------------------------------------
+# SIDEBAR
+# --------------------------------------------------
+st.sidebar.header("Forecast Settings")
+
+horizon = st.sidebar.selectbox(
+    "Select forecast horizon",
+    options=[3, 6, 12],
+    format_func=lambda value: f"{value} months"
 )
 
-available_years = sorted(
-    {date.year for date in available_start_dates}
+st.sidebar.caption(
+    "Forecasting begins automatically after the dataset's last month."
 )
 
-# =====================================================
-# HISTORICAL SUMMARY
-# =====================================================
-st.subheader("Historical Sales Overview")
+st.sidebar.divider()
+st.sidebar.subheader("Dataset Information")
+st.sidebar.write(f"Historical months: **{len(monthly_sales)}**")
+st.sidebar.write(
+    f"Last recorded month: **{last_month.strftime('%B %Y')}**"
+)
+st.sidebar.write(
+    f"Forecast starts: **{forecast_start.strftime('%B %Y')}**"
+)
+
+# --------------------------------------------------
+# OVERVIEW METRICS
+# --------------------------------------------------
+total_historical_sales = monthly_sales.sum()
+average_monthly_sales = monthly_sales.mean()
 
 col1, col2, col3 = st.columns(3)
 
-with col1:
-    st.metric(
-        "First Historical Month",
-        monthly_sales.index.min().strftime("%B %Y")
-    )
+col1.metric(
+    "Total Historical Sales",
+    f"{total_historical_sales:,.2f}"
+)
 
-with col2:
-    st.metric(
-        "Last Historical Month",
-        last_actual_month.to_timestamp().strftime("%B %Y")
-    )
+col2.metric(
+    "Average Monthly Sales",
+    f"{average_monthly_sales:,.2f}"
+)
 
-with col3:
-    st.metric(
-        "Historical Months",
-        len(monthly_sales)
-    )
+col3.metric(
+    "Historical Months",
+    f"{len(monthly_sales)}"
+)
 
-# =====================================================
+# --------------------------------------------------
 # HISTORICAL SALES CHART
-# =====================================================
+# --------------------------------------------------
+st.divider()
 st.subheader("Historical Monthly Sales")
 
-historical_chart = monthly_sales.rename("Actual Sales").to_frame()
-st.line_chart(historical_chart, y="Actual Sales", use_container_width=True)
+historical_chart = monthly_sales.rename("Sales").reset_index()
+historical_chart.columns = ["Month", "Sales"]
 
+st.line_chart(
+    historical_chart,
+    x="Month",
+    y="Sales",
+    use_container_width=True
+)
+
+with st.expander("View historical sales data"):
+    st.dataframe(
+        historical_chart.sort_values("Month", ascending=False),
+        use_container_width=True,
+        hide_index=True
+    )
+
+# --------------------------------------------------
+# FORECAST SECTION
+# --------------------------------------------------
 st.divider()
+st.subheader("Future Sales Forecast")
 
-# =====================================================
-# FORECAST CONTROLS
-# =====================================================
-st.subheader("Configure Your Forecast")
-
-col1, col2, col3 = st.columns(3)
-
-with col1:
-    selected_year = st.selectbox(
-        "Forecast Start Year",
-        options=available_years,
-        index=0
-    )
-
-months_for_selected_year = [
-    date for date in available_start_dates
-    if date.year == selected_year
-]
-
-with col2:
-    selected_month_label = st.selectbox(
-        "Forecast Start Month",
-        options=[date.strftime("%B") for date in months_for_selected_year]
-    )
-
-selected_start = next(
-    date for date in months_for_selected_year
-    if date.strftime("%B") == selected_month_label
+st.write(
+    f"Selected horizon: **{horizon} months** | "
+    f"Forecast starts: **{forecast_start.strftime('%d %b %Y')}**"
 )
 
-with col3:
-    horizon = st.selectbox(
-        "Forecast Horizon",
-        options=[1, 2, 3, 4, 5, 6],
-        index=2,
-        format_func=lambda x: f"{x} Month{'s' if x != 1 else ''}"
-    )
-
-forecast_end = (
-    selected_start.to_period("M") + horizon - 1
-).to_timestamp()
-
-st.caption(
-    f"Selected forecast period: "
-    f"{selected_start.strftime('%B %Y')} to "
-    f"{forecast_end.strftime('%B %Y')}."
-)
-
-st.info(
-    "The dataset ends in September 2014. Forecasts start after the "
-    "last historical month. If you choose a later start month, the app "
-    "generates intermediate monthly predictions before showing your "
-    "selected period. Predictions farther from the historical data "
-    "are increasingly uncertain."
-)
-
-# =====================================================
-# GENERATE FORECAST
-# =====================================================
 if st.button("Generate Sales Forecast", type="primary", use_container_width=True):
-
     try:
-        with st.spinner("Generating monthly sales forecast..."):
-            forecast_df = generate_forecast(
-                monthly_sales=monthly_sales,
-                model=model,
-                feature_columns=feature_columns,
-                selected_start=selected_start,
-                horizon=horizon,
-                first_year=first_year
-            )
+        forecast_df = generate_forecast(
+            model=model,
+            historical_sales=monthly_sales,
+            feature_columns=feature_columns,
+            horizon=horizon
+        )
 
-        if forecast_df.empty:
-            st.warning("No forecast results were generated.")
-            st.stop()
+        first_forecast_month = forecast_df["Month"].min()
+        last_forecast_month = forecast_df["Month"].max()
 
-        # =============================================
-        # FORECAST SUMMARY
-        # =============================================
-        st.success("Forecast generated successfully!")
+        # Inclusive calendar range
+        range_start = first_forecast_month
+        range_end = last_forecast_month + pd.offsets.MonthEnd(0)
+        calendar_days = (range_end - range_start).days + 1
 
         total_forecast = forecast_df["Predicted Sales"].sum()
         average_forecast = forecast_df["Predicted Sales"].mean()
 
-        metric1, metric2, metric3 = st.columns(3)
+        st.success("Forecast generated successfully.")
 
-        with metric1:
-            st.metric(
-                "Total Forecast Sales",
-                f"{total_forecast:,.2f}"
-            )
+        # Forecast range information
+        date_col1, date_col2, date_col3 = st.columns(3)
 
-        with metric2:
-            st.metric(
-                "Average Monthly Forecast",
-                f"{average_forecast:,.2f}"
-            )
+        date_col1.metric(
+            "Forecast Start Date",
+            range_start.strftime("%d %b %Y")
+        )
 
-        with metric3:
-            st.metric(
-                "Forecast Months",
-                len(forecast_df)
-            )
+        date_col2.metric(
+            "Forecast End Date",
+            range_end.strftime("%d %b %Y")
+        )
 
-        # =============================================
-        # FORECAST TABLE
-        # =============================================
-        st.subheader("Forecast Results")
+        date_col3.metric(
+            "Calendar Days Covered",
+            f"{calendar_days} days"
+        )
 
-        display_df = forecast_df.copy()
-        display_df["Forecast Month"] = (
-            display_df["Forecast Month"].dt.strftime("%B %Y")
+        # Forecast KPIs
+        kpi1, kpi2, kpi3 = st.columns(3)
+
+        kpi1.metric(
+            "Total Predicted Sales",
+            f"{total_forecast:,.2f}"
+        )
+
+        kpi2.metric(
+            "Average Monthly Forecast",
+            f"{average_forecast:,.2f}"
+        )
+
+        kpi3.metric(
+            "Forecast Horizon",
+            f"{horizon} months"
+        )
+
+        st.caption(
+            "Calendar days represent the inclusive date range covered "
+            "by the monthly forecasts. They are not daily predictions."
+        )
+
+        # Forecast table
+        st.subheader("Monthly Forecast Results")
+
+        display_forecast = forecast_df.copy()
+        display_forecast["Month"] = display_forecast["Month"].dt.strftime(
+            "%B %Y"
+        )
+        display_forecast["Predicted Sales"] = (
+            display_forecast["Predicted Sales"].round(2)
         )
 
         st.dataframe(
-            display_df,
+            display_forecast,
             use_container_width=True,
             hide_index=True
         )
 
-        # =============================================
-        # FORECAST CHART
-        # =============================================
+        # Forecast chart
         st.subheader("Predicted Monthly Sales")
 
-        forecast_chart = forecast_df.set_index("Forecast Month")[
-            ["Predicted Sales"]
-        ]
-
         st.line_chart(
-            forecast_chart,
+            forecast_df,
+            x="Month",
             y="Predicted Sales",
             use_container_width=True
         )
 
-        # =============================================
-        # HISTORICAL VS FORECAST CHART
-        # =============================================
-        st.subheader("Historical Sales vs Forecast")
+        # Historical + forecast comparison chart
+        st.subheader("Historical vs Forecast Sales")
 
-        historical_part = monthly_sales.rename("Actual Sales").to_frame()
+        historical_part = pd.DataFrame({
+            "Month": monthly_sales.index,
+            "Sales": monthly_sales.values,
+            "Type": "Historical"
+        })
 
-        forecast_part = forecast_df.set_index("Forecast Month")[
-            ["Predicted Sales"]
-        ]
+        forecast_part = pd.DataFrame({
+            "Month": forecast_df["Month"],
+            "Sales": forecast_df["Predicted Sales"],
+            "Type": "Forecast"
+        })
 
-        comparison_df = historical_part.join(
-            forecast_part,
-            how="outer"
+        combined_chart = pd.concat(
+            [historical_part, forecast_part],
+            ignore_index=True
+        )
+
+        combined_chart["Historical Sales"] = combined_chart["Sales"].where(
+            combined_chart["Type"] == "Historical"
+        )
+        combined_chart["Forecast Sales"] = combined_chart["Sales"].where(
+            combined_chart["Type"] == "Forecast"
         )
 
         st.line_chart(
-            comparison_df,
+            combined_chart,
+            x="Month",
+            y=["Historical Sales", "Forecast Sales"],
             use_container_width=True
         )
 
-        # =============================================
-        # DOWNLOAD FORECAST CSV
-        # =============================================
+        # CSV download
         csv_data = forecast_df.copy()
-        csv_data["Forecast Month"] = (
-            csv_data["Forecast Month"].dt.strftime("%Y-%m-%d")
-        )
-
-        csv_bytes = csv_data.to_csv(index=False).encode("utf-8")
+        csv_data["Month"] = csv_data["Month"].dt.strftime("%Y-%m-%d")
 
         st.download_button(
             label="Download Forecast as CSV",
-            data=csv_bytes,
-            file_name="sales_forecast.csv",
+            data=csv_data.to_csv(index=False).encode("utf-8"),
+            file_name=f"sales_forecast_{horizon}_months.csv",
             mime="text/csv",
             use_container_width=True
         )
 
         st.caption(
-            "Note: Forecast values are model estimates, not actual sales. "
-            "This app produces monthly predictions, not daily predictions."
+            "These estimates are model-based forecasts, not guaranteed "
+            "actual sales. Forecast quality depends on the historical "
+            "data and the patterns learned during training."
         )
 
     except Exception as error:
-        st.error(f"An error occurred while generating the forecast: {error}")
+        st.error(f"Forecast generation failed: {error}")
+        st.info(
+            "Please verify that the feature engineering in this app "
+            "matches the feature engineering used when training the model."
+        )
 
-# =====================================================
+# --------------------------------------------------
 # FOOTER
-# =====================================================
+# --------------------------------------------------
 st.divider()
-st.caption("Sales Forecasting Project | Ridge Regression")
+st.caption(
+    "Sales Forecasting Project | Ridge Regression | "
+    "Monthly time-series forecasting"
+)
