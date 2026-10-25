@@ -279,7 +279,7 @@ month_names = {
 
 # Allow forecast start years from the first forecast year to 2016.
 MIN_FORECAST_YEAR = first_forecast_month.year
-MAX_FORECAST_YEAR = 2016
+MAX_FORECAST_YEAR = 2014
 
 if MIN_FORECAST_YEAR > MAX_FORECAST_YEAR:
     st.error(
