@@ -540,7 +540,7 @@ if st.button(
 
         comparison_fig = create_sales_chart(
             historical_data=comparison_history,
-            forecast_data=forecast_df,
+            forecast_data=all_forecasts,
             title="Historical vs Forecast Sales",
             height=500
         )
