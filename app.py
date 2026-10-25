@@ -1,3 +1,4 @@
+
 import streamlit as st
 import pandas as pd
 import joblib
@@ -400,18 +401,7 @@ st.write(
 )
 st.write(f"Forecast duration: **{horizon} months**")
 
-# ---> VALIDATION CHECK ADDED HERE <---
-valid_forecast_start = last_historical_month + pd.offsets.MonthBegin(1)
-
-if selected_forecast_start > valid_forecast_start:
-    st.warning(
-        f"⚠️ **Data Not Available for Selected Range!**\n\n"
-        f"Aapne **{selected_forecast_start.strftime('%B %Y')}** select kiya hai, lekin dataset ka aakhri historical month "
-        f"**{last_historical_month.strftime('%B %Y')}** hai.\n\n"
-        f"👉 Continuous comparison aur correct graph dekhne ke liye please forecast start date "
-        f"**{valid_forecast_start.strftime('%B %Y')}** select karein."
-    )
-elif st.button(
+if st.button(
     "Generate Sales Forecast",
     type="primary",
     use_container_width=True
@@ -609,18 +599,19 @@ elif st.button(
             "Forecast values are estimates and may differ from actual sales."
         )
 
-        # =========================================================
-        # 17. FOOTER
-        # =========================================================
-        st.divider()
-        st.caption(
-            "Sales Forecasting Dashboard | Ridge Regression | "
-            "Monthly Time-Series Forecasting"
-        )
-
     except Exception as error:
         st.error(f"Forecast generation failed: {error}")
         st.info(
             "Check that the model feature calculations match "
             "those used during training."
         )
+
+
+# =========================================================
+# 17. FOOTER
+# =========================================================
+st.divider()
+st.caption(
+    "Sales Forecasting Dashboard | Ridge Regression | "
+    "Monthly Time-Series Forecasting"
+)
