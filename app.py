@@ -700,3 +700,19 @@ st.caption(
     "Sales Forecasting Dashboard | Ridge Regression | "
     "Monthly Time-Series Forecasting"
 )
+
+
+
+# Check existing daily forecasting variables
+
+keywords = [
+    "daily", "ridge", "random", "forest",
+    "model", "feature", "forecast", "train", "predict"
+]
+
+for name, obj in globals().copy().items():
+    if any(word in name.lower() for word in keywords):
+        try:
+            print(f"{name}: {type(obj).__name__}")
+        except Exception:
+            pass
