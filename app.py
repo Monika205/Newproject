@@ -21,7 +21,7 @@ DAILY_CSV_PATH = "daily_historical_sales.csv"
 
 
 # =========================================================
-# 2. LOAD MONTHLY HISTORICAL SALES FROM BACKEND
+# 2. LOAD MONTHLY HISTORICAL SALES
 # =========================================================
 @st.cache_data(ttl=3600)
 def load_historical_sales():
@@ -55,6 +55,7 @@ def load_historical_sales():
     )
 
     history_df = history_df.dropna(subset=["Month", "Sales"])
+
     history_df["Month"] = (
         history_df["Month"].dt.to_period("M").dt.to_timestamp()
     )
@@ -74,7 +75,7 @@ def load_historical_sales():
 
 
 # =========================================================
-# 3. LOAD DATE-WISE HISTORICAL SALES FROM CSV
+# 3. LOAD DAILY HISTORICAL SALES
 # =========================================================
 @st.cache_data(ttl=3600)
 def load_daily_historical_sales():
@@ -100,7 +101,6 @@ def load_daily_historical_sales():
 
     daily_df["Date"] = daily_df["Date"].dt.normalize()
 
-    # Combine duplicate dates if any exist.
     daily_df = (
         daily_df.groupby("Date", as_index=False)["Historical Sales"]
         .sum()
@@ -109,13 +109,13 @@ def load_daily_historical_sales():
     )
 
     if daily_df.empty:
-        raise ValueError("No valid daily sales records were found.")
+        raise ValueError("No daily historical sales records were found.")
 
     return daily_df
 
 
 # =========================================================
-# 4. MONTHLY SALES CHART HELPER
+# 4. PLOTLY CHART HELPER
 # =========================================================
 def create_sales_chart(
     historical_data,
@@ -197,7 +197,7 @@ def create_sales_chart(
 
 
 # =========================================================
-# 5. DASHBOARD HEADER AND MONTHLY DATA
+# 5. DASHBOARD HEADER
 # =========================================================
 st.title("📈 Sales Forecasting Dashboard")
 
@@ -215,21 +215,20 @@ except Exception as error:
         f"Unable to load historical sales from the backend: {error}"
     )
     st.info(
-        "Check that the Render backend is running and the /history "
-        "endpoint is available."
+        "Check that the Render backend is running and that "
+        "the /history endpoint is available."
     )
     st.stop()
 
 first_historical_month = monthly_sales.index.min()
 last_historical_month = monthly_sales.index.max()
 
-# The forecasting model needs 12 preceding historical months.
 earliest_forecast_month = (
     first_historical_month + pd.DateOffset(months=12)
 )
 
 st.info(
-    f"Historical monthly data: "
+    f"Historical data: "
     f"{first_historical_month.strftime('%B %Y')} to "
     f"{last_historical_month.strftime('%B %Y')}. "
     f"Earliest eligible forecast month: "
@@ -333,7 +332,7 @@ if not valid_forecast_date:
 
 
 # =========================================================
-# 7. HISTORICAL MONTHLY SALES OVERVIEW
+# 7. HISTORICAL SALES OVERVIEW
 # =========================================================
 st.divider()
 st.subheader("📊 Historical Sales Overview")
@@ -383,121 +382,40 @@ with st.expander("View Historical Monthly Sales Data"):
 
 
 # =========================================================
-# 8. NEW: DATE-WISE HISTORICAL SALES TABLE
+# 8. DATE-WISE HISTORICAL SALES TABLE
 # =========================================================
-st.divider()
-st.subheader("🗓️ Date-wise Historical Sales")
-
-st.write(
-    "Select a start date and end date to view actual recorded sales "
-    "for each order date in the selected period."
-)
+st.subheader("Date-wise Historical Sales")
 
 try:
     daily_history = load_daily_historical_sales()
 
-    earliest_daily_date = daily_history["Date"].min().date()
-    latest_daily_date = daily_history["Date"].max().date()
+    with st.expander("View Historical Daily Sales"):
+        daily_table = daily_history.copy()
 
-    date_col1, date_col2 = st.columns(2)
-
-    with date_col1:
-        start_date = st.date_input(
-            "Start Date",
-            value=earliest_daily_date,
-            min_value=earliest_daily_date,
-            max_value=latest_daily_date,
-            key="daily_sales_start_date"
+        daily_table["Date"] = (
+            daily_table["Date"].dt.strftime("%d %B %Y")
         )
 
-    with date_col2:
-        end_date = st.date_input(
-            "End Date",
-            value=latest_daily_date,
-            min_value=earliest_daily_date,
-            max_value=latest_daily_date,
-            key="daily_sales_end_date"
+        daily_table["Historical Sales"] = (
+            daily_table["Historical Sales"].round(2)
         )
 
-    if start_date > end_date:
-        st.error("Start Date cannot be later than End Date.")
-
-    else:
-        filtered_daily_history = daily_history[
-            (daily_history["Date"] >= pd.Timestamp(start_date))
-            & (daily_history["Date"] <= pd.Timestamp(end_date))
-        ].copy()
-
-        if filtered_daily_history.empty:
-            st.warning(
-                "No recorded sales were found for the selected date range."
-            )
-
-        else:
-            total_range_sales = (
-                filtered_daily_history["Historical Sales"].sum()
-            )
-
-            recorded_dates = len(filtered_daily_history)
-
-            daily_col1, daily_col2 = st.columns(2)
-
-            daily_col1.metric(
-                "Total Sales in Selected Range",
-                f"{total_range_sales:,.2f}"
-            )
-
-            daily_col2.metric(
-                "Dates with Recorded Orders",
-                f"{recorded_dates}"
-            )
-
-            st.caption(
-                f"Showing recorded order dates from "
-                f"{start_date.strftime('%d %b %Y')} to "
-                f"{end_date.strftime('%d %b %Y')}. "
-                "Dates without recorded orders are not listed or "
-                "assumed to have zero sales."
-            )
-
-            display_daily_history = filtered_daily_history.copy()
-
-            display_daily_history["Date"] = (
-                display_daily_history["Date"].dt.strftime("%d %b %Y")
-            )
-
-            display_daily_history["Historical Sales"] = (
-                display_daily_history["Historical Sales"].round(2)
-            )
-
-            st.dataframe(
-                display_daily_history,
-                use_container_width=True,
-                hide_index=True
-            )
-
-            st.download_button(
-                label="⬇️ Download Selected Historical Sales as CSV",
-                data=filtered_daily_history.to_csv(
-                    index=False,
-                    date_format="%Y-%m-%d"
-                ).encode("utf-8"),
-                file_name=(
-                    f"historical_sales_{start_date}_{end_date}.csv"
-                ),
-                mime="text/csv",
-                use_container_width=True
-            )
+        st.dataframe(
+            daily_table,
+            use_container_width=True,
+            hide_index=True
+        )
 
 except FileNotFoundError:
     st.error(
-        f"File '{DAILY_CSV_PATH}' was not found. "
-        "Upload daily_historical_sales.csv to the same GitHub folder "
-        "as app.py."
+        "The file 'daily_historical_sales.csv' was not found. "
+        "Upload it to the same GitHub folder as app.py."
     )
 
 except Exception as error:
-    st.error(f"Unable to load date-wise historical sales: {error}")
+    st.error(
+        f"Unable to load date-wise historical sales: {error}"
+    )
 
 
 # =========================================================
