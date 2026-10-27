@@ -31,12 +31,12 @@ def load_historical_sales():
     data = response.json()
 
     if "historical_sales" not in data:
-        raise ValueError("historical_sales is missing from the API.")
+        raise ValueError("Historical sales are missing from the API.")
 
     df = pd.DataFrame(data["historical_sales"])
 
     if not {"Month", "Sales"}.issubset(df.columns):
-        raise ValueError("Monthly history needs Month and Sales columns.")
+        raise ValueError("Monthly data must contain Month and Sales.")
 
     df["Month"] = pd.to_datetime(df["Month"], errors="coerce")
     df["Sales"] = pd.to_numeric(df["Sales"], errors="coerce")
@@ -44,12 +44,7 @@ def load_historical_sales():
 
     df["Month"] = df["Month"].dt.to_period("M").dt.to_timestamp()
 
-    monthly = df.groupby("Month")["Sales"].sum().sort_index()
-
-    if monthly.empty:
-        raise ValueError("No monthly historical data was returned.")
-
-    return monthly
+    return df.groupby("Month")["Sales"].sum().sort_index()
 
 
 # =========================================================
@@ -60,11 +55,9 @@ def load_daily_historical_sales():
     df = pd.read_csv(DAILY_CSV_PATH)
 
     required = {"Date", "Historical Sales"}
-
     if not required.issubset(df.columns):
         raise ValueError(
-            "daily_historical_sales.csv must contain Date "
-            "and Historical Sales columns."
+            "CSV must contain Date and Historical Sales columns."
         )
 
     df["Date"] = pd.to_datetime(
@@ -77,25 +70,19 @@ def load_daily_historical_sales():
 
     df = df.dropna(subset=["Date", "Historical Sales"])
 
-    # Combine multiple records on the same date.
-    daily = (
-        df.groupby("Date")["Historical Sales"]
-        .sum()
-        .sort_index()
-    )
+    daily = df.groupby("Date")["Historical Sales"].sum().sort_index()
 
     if daily.empty:
-        raise ValueError("No daily historical sales records found.")
+        raise ValueError("No daily historical sales were found.")
 
-    # IMPORTANT: Create every calendar date.
-    # Dates with no recorded sales receive a value of zero.
-    all_dates = pd.date_range(
+    # Add every calendar date, including zero-sales dates.
+    complete_dates = pd.date_range(
         start=daily.index.min(),
         end=daily.index.max(),
         freq="D"
     )
 
-    daily = daily.reindex(all_dates, fill_value=0)
+    daily = daily.reindex(complete_dates, fill_value=0)
     daily.index.name = "Date"
     daily.name = "Historical Sales"
 
@@ -121,10 +108,9 @@ def create_sales_chart(
                 mode="lines+markers",
                 name="Historical Sales",
                 line=dict(width=2.5),
-                marker=dict(size=5),
                 hovertemplate=(
                     "Date: %{x|%d %b %Y}<br>"
-                    "Sales: %{y:,.2f}<extra></extra>"
+                    "Historical Sales: %{y:,.2f}<extra></extra>"
                 )
             )
         )
@@ -134,10 +120,9 @@ def create_sales_chart(
             go.Scatter(
                 x=forecast["Date"],
                 y=forecast["Predicted Sales"],
-                mode="lines+markers",
+                mode="lines",
                 name="Predicted Sales",
                 line=dict(width=2.5, dash="dash"),
-                marker=dict(size=4),
                 hovertemplate=(
                     "Date: %{x|%d %b %Y}<br>"
                     "Predicted Sales: %{y:,.2f}<extra></extra>"
@@ -176,13 +161,13 @@ def create_sales_chart(
 
 
 # =========================================================
-# 5. DASHBOARD HEADER AND DATA
+# 5. DASHBOARD HEADER
 # =========================================================
 st.title("📈 Sales Forecasting Dashboard")
 
 st.write(
-    "Explore historical sales and generate daily sales predictions "
-    "using the Ridge Regression model through a FastAPI backend."
+    "Explore historical sales and generate daily predictions "
+    "using a Ridge Regression model through a FastAPI backend."
 )
 
 try:
@@ -193,8 +178,8 @@ try:
 except Exception as error:
     st.error(f"Unable to load historical data: {error}")
     st.info(
-        "Check the Render backend and confirm that "
-        "daily_historical_sales.csv exists beside app.py in GitHub."
+        "Check the Render backend and ensure "
+        "daily_historical_sales.csv exists beside app.py."
     )
     st.stop()
 
@@ -202,18 +187,16 @@ first_historical_date = daily_sales.index.min()
 last_historical_date = daily_sales.index.max()
 
 st.info(
-    f"Daily historical data: {first_historical_date:%d %B %Y} "
-    f"to {last_historical_date:%d %B %Y}. "
-    "Predictions are estimates, not actual future sales."
+    f"Historical data: {first_historical_date:%d %B %Y} to "
+    f"{last_historical_date:%d %B %Y}. "
+    "Forecast values are estimates, not actual future sales."
 )
 
 
 # =========================================================
-# 6. SIDEBAR FORECAST SETTINGS
+# 6. FORECAST SETTINGS
 # =========================================================
 st.sidebar.header("⚙️ Forecast Settings")
-
-st.sidebar.subheader("Select Forecast Start")
 
 selected_year = st.sidebar.selectbox(
     "Select Year",
@@ -223,18 +206,10 @@ selected_year = st.sidebar.selectbox(
 )
 
 month_names = {
-    1: "January",
-    2: "February",
-    3: "March",
-    4: "April",
-    5: "May",
-    6: "June",
-    7: "July",
-    8: "August",
-    9: "September",
-    10: "October",
-    11: "November",
-    12: "December"
+    1: "January", 2: "February", 3: "March",
+    4: "April", 5: "May", 6: "June",
+    7: "July", 8: "August", 9: "September",
+    10: "October", 11: "November", 12: "December"
 }
 
 selected_month = st.sidebar.selectbox(
@@ -256,7 +231,7 @@ duration_months = st.sidebar.selectbox(
     key="forecast_duration"
 )
 
-# One selected month equals 30 forecast days.
+# Forecast duration uses 30 days per selected month.
 forecast_days = duration_months * 30
 
 selected_month_start = pd.Timestamp(
@@ -265,8 +240,7 @@ selected_month_start = pd.Timestamp(
     day=1
 )
 
-# If the selected month is historical, start after the last
-# historical date. Otherwise, use the selected month's first day.
+# Prevent overlap with historical data.
 forecast_start = max(
     selected_month_start,
     last_historical_date + pd.Timedelta(days=1)
@@ -277,26 +251,20 @@ forecast_end = forecast_start + pd.Timedelta(
 )
 
 st.sidebar.caption(f"Forecast days: {forecast_days}")
-st.sidebar.caption(f"Start date: {forecast_start:%d %b %Y}")
-st.sidebar.caption(f"End date: {forecast_end:%d %b %Y}")
+st.sidebar.caption(f"Start: {forecast_start:%d %b %Y}")
+st.sidebar.caption(f"End: {forecast_end:%d %b %Y}")
 
 if selected_month_start <= last_historical_date:
     st.sidebar.warning(
         "The selected month overlaps historical data. "
-        "Forecasting will start after the last historical date."
+        "The forecast starts after the last historical date."
     )
 
 st.sidebar.divider()
 st.sidebar.subheader("Dataset Information")
-st.sidebar.write(
-    f"First date: **{first_historical_date:%d %b %Y}**"
-)
-st.sidebar.write(
-    f"Last date: **{last_historical_date:%d %b %Y}**"
-)
-st.sidebar.write(
-    f"Continuous historical days: **{len(daily_sales)}**"
-)
+st.sidebar.write(f"First historical date: **{first_historical_date:%d %b %Y}**")
+st.sidebar.write(f"Last historical date: **{last_historical_date:%d %b %Y}**")
+st.sidebar.write(f"Historical days: **{len(daily_sales)}**")
 
 
 # =========================================================
@@ -307,20 +275,9 @@ st.subheader("📊 Historical Sales Overview")
 
 col1, col2, col3 = st.columns(3)
 
-col1.metric(
-    "Total Historical Sales",
-    f"{daily_sales.sum():,.2f}"
-)
-col2.metric(
-    "Average Daily Sales",
-    f"{daily_sales.mean():,.2f}"
-)
-col3.metric(
-    "Historical Days",
-    f"{len(daily_sales):,}"
-)
-
-st.subheader("Historical Monthly Sales")
+col1.metric("Total Historical Sales", f"{daily_sales.sum():,.2f}")
+col2.metric("Average Daily Sales", f"{daily_sales.mean():,.2f}")
+col3.metric("Historical Days", f"{len(daily_sales):,}")
 
 st.plotly_chart(
     create_sales_chart(
@@ -345,23 +302,15 @@ with st.expander("View Historical Monthly Sales"):
 
 
 # =========================================================
-# 8. CONTINUOUS DAILY HISTORICAL TABLE
+# 8. HISTORICAL DAILY TABLE
 # =========================================================
 st.divider()
-st.subheader("📅 Date-wise Historical Sales")
+st.subheader("📅 Historical Daily Sales")
 
-st.caption(
-    "Every calendar date is included. Dates without recorded sales "
-    "are displayed with 0.00 sales."
-)
-
-with st.expander("View Historical Daily Sales", expanded=True):
+with st.expander("View Historical Daily Sales", expanded=False):
     daily_table = daily_sales.rename_axis("Date").reset_index()
-
     daily_table["Date"] = daily_table["Date"].dt.strftime("%d %B %Y")
-    daily_table["Historical Sales"] = (
-        daily_table["Historical Sales"].round(2)
-    )
+    daily_table["Historical Sales"] = daily_table["Historical Sales"].round(2)
 
     st.dataframe(
         daily_table[["Date", "Historical Sales"]],
@@ -370,31 +319,17 @@ with st.expander("View Historical Daily Sales", expanded=True):
         height=450
     )
 
-    historical_csv = daily_sales.rename_axis("Date").reset_index()
-    historical_csv["Historical Sales"] = (
-        historical_csv["Historical Sales"].round(2)
-    )
-
-    st.download_button(
-        "⬇️ Download Daily Historical Sales",
-        data=historical_csv.to_csv(index=False).encode("utf-8"),
-        file_name="continuous_daily_historical_sales.csv",
-        mime="text/csv"
-    )
-
 
 # =========================================================
-# 9. DAILY FORECAST API
+# 9. DAILY SALES FORECAST
 # =========================================================
 st.divider()
 st.subheader("🔮 Daily Sales Forecast")
 
 st.write(
     f"Forecast period: **{forecast_start:%d %B %Y}** to "
-    f"**{forecast_end:%d %B %Y}**"
+    f"**{forecast_end:%d %B %Y}** — {forecast_days} days"
 )
-
-st.write(f"Forecast duration: **{forecast_days} days**")
 
 if st.button(
     "Generate Daily Forecast",
@@ -407,7 +342,7 @@ if st.button(
             "days": int(forecast_days)
         }
 
-        with st.spinner("Generating daily predictions from Render..."):
+        with st.spinner("Generating daily predictions..."):
             response = requests.post(
                 DAILY_FORECAST_API_URL,
                 json=payload,
@@ -416,15 +351,12 @@ if st.button(
 
         if response.status_code >= 400:
             try:
-                error_detail = response.json().get(
-                    "detail", response.text
-                )
+                detail = response.json().get("detail", response.text)
             except ValueError:
-                error_detail = response.text
+                detail = response.text
 
             st.error(
-                f"Daily forecast API error "
-                f"({response.status_code}): {error_detail}"
+                f"Daily forecast API error ({response.status_code}): {detail}"
             )
             st.stop()
 
@@ -437,40 +369,34 @@ if st.button(
         )
 
         if not records:
-            st.error(
-                "No predictions were returned. Check the "
-                "/daily-forecast API response in Render."
-            )
+            st.error("The API returned no daily predictions.")
             st.code(str(result))
             st.stop()
 
         forecast_df = pd.DataFrame(records)
 
         date_column = next(
-            (
-                column for column in ["date", "Date", "day"]
-                if column in forecast_df.columns
-            ),
+            (c for c in ["date", "Date", "day"] if c in forecast_df.columns),
             None
         )
 
         sales_column = next(
             (
-                column for column in [
+                c for c in [
                     "predicted_sales",
                     "Predicted Sales",
                     "prediction",
                     "predicted_value"
                 ]
-                if column in forecast_df.columns
+                if c in forecast_df.columns
             ),
             None
         )
 
         if date_column is None or sales_column is None:
             st.error(
-                "Unexpected API response. The response must contain "
-                "a date field and a predicted sales field."
+                "The API response must contain a date field and "
+                "a predicted sales field."
             )
             st.code(str(result))
             st.stop()
@@ -495,14 +421,12 @@ if st.button(
         )
 
         forecast_df = (
-            forecast_df.groupby("Date", as_index=False)[
-                "Predicted Sales"
-            ]
+            forecast_df.groupby("Date", as_index=False)["Predicted Sales"]
             .last()
             .sort_values("Date")
         )
 
-        # Create the exact expected daily date range.
+        # Enforce the complete consecutive date range.
         expected_dates = pd.date_range(
             start=forecast_start,
             periods=forecast_days,
@@ -524,15 +448,15 @@ if st.button(
             ].dt.strftime("%Y-%m-%d").tolist()
 
             st.error(
-                f"The API is missing predictions for "
-                f"{len(missing_dates)} date(s): "
+                f"Backend predictions are missing for "
+                f"{len(missing_dates)} dates: "
                 + ", ".join(missing_dates[:20])
             )
 
             st.warning(
-                "The dates are now continuous in the table, but "
-                "the missing prediction values must be fixed in "
-                "the backend. They have not been fabricated."
+                "All dates are displayed, but missing predictions "
+                "must be generated by the backend. No values have "
+                "been fabricated."
             )
 
         valid_forecast = forecast_df.dropna(
@@ -540,7 +464,7 @@ if st.button(
         ).copy()
 
         if valid_forecast.empty:
-            st.error("No valid daily predictions are available.")
+            st.error("No valid predictions are available.")
             st.stop()
 
         st.success(
@@ -549,20 +473,17 @@ if st.button(
 
         metric1, metric2, metric3 = st.columns(3)
 
-        metric1.metric(
-            "Requested Forecast Days",
-            forecast_days
-        )
+        metric1.metric("Requested Days", forecast_days)
         metric2.metric(
             "Total Predicted Sales",
             f"{valid_forecast['Predicted Sales'].sum():,.2f}"
         )
         metric3.metric(
-            "Average Daily Forecast",
+            "Average Daily Predicted Sales",
             f"{valid_forecast['Predicted Sales'].mean():,.2f}"
         )
 
-        # DAILY FORECAST TABLE
+        # MAIN FORECAST TABLE: PREDICTED SALES, NOT HISTORICAL SALES
         st.subheader("📋 Date-wise Predicted Sales")
 
         display_forecast = forecast_df.copy()
@@ -581,19 +502,19 @@ if st.button(
         )
 
         # DAILY FORECAST CHART
-        st.subheader("📈 Daily Predicted Sales")
+        st.subheader("📈 Daily Predicted Sales Trend")
 
         st.plotly_chart(
             create_sales_chart(
                 forecast=valid_forecast,
-                title="Daily Sales Forecast",
+                title="Daily Predicted Sales",
                 date_format="%d %b %Y"
             ),
             use_container_width=True,
             config={"displaylogo": False}
         )
 
-        # DOWNLOAD DAILY FORECAST
+        # DOWNLOAD FORECAST
         download_df = valid_forecast.copy()
         download_df["Date"] = (
             download_df["Date"].dt.strftime("%Y-%m-%d")
@@ -613,22 +534,20 @@ if st.button(
         )
 
         st.caption(
-            "Forecasts are estimates and may differ from actual sales."
+            "Predicted sales are estimates and may differ from actual sales."
         )
 
     except requests.exceptions.RequestException as error:
-        st.error(f"Could not connect to Render: {error}")
+        st.error(f"Could not connect to the Render backend: {error}")
 
     except Exception as error:
-        st.error(f"Forecast generation failed: {error}")
+        st.error(f"Daily forecast failed: {error}")
 
 
 # =========================================================
 # 10. FOOTER
 # =========================================================
 st.divider()
-
 st.caption(
-    "Sales Forecasting Dashboard | Daily Ridge Regression | "
-    "FastAPI Backend"
+    "Sales Forecasting Dashboard | Daily Ridge Regression | FastAPI Backend"
 )
